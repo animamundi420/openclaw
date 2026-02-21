@@ -1,6 +1,8 @@
 import { inspect } from "node:util";
 import {
   Client,
+  GuildCreateListener,
+  GuildDeleteListener,
   ReadyListener,
   type BaseMessageInteractiveComponent,
   type Modal,
@@ -26,6 +28,7 @@ import {
 } from "../../config/commands.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { getGuildRegistry } from "../../discord-access/guild-registry.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
@@ -506,6 +509,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   }
 
+  // Track bot guild membership in the unified access registry.
+  const botGuildRegistry = getGuildRegistry();
+
+  class DiscordGuildCreateTracker extends GuildCreateListener {
+    async handle(data: unknown) {
+      const guild = (data as { guild?: { id?: string } })?.guild;
+      if (guild?.id) {
+        botGuildRegistry.registerAccess(guild.id, "bot", account.accountId);
+      }
+    }
+  }
+
+  class DiscordGuildDeleteTracker extends GuildDeleteListener {
+    async handle(data: unknown) {
+      const guild = (data as { guild?: { id?: string } })?.guild;
+      if (guild?.id) {
+        botGuildRegistry.removeAccess(guild.id, "bot");
+      }
+    }
+  }
+
   const client = new Client(
     {
       baseUrl: "http://localhost",
@@ -517,12 +541,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     },
     {
       commands,
-      listeners: [new DiscordStatusReadyListener()],
+      listeners: [
+        new DiscordStatusReadyListener(),
+        new DiscordGuildCreateTracker(),
+        new DiscordGuildDeleteTracker(),
+      ],
       components,
       modals,
     },
     [createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime })],
   );
+
+  // Register bot REST client with the unified access registry
+  botGuildRegistry.registerClient("bot", client.rest, account.accountId);
 
   await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
 

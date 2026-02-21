@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { getGuildRegistry } from "../../discord-access/guild-registry.js";
 import { logVerbose } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordUserAccount } from "../accounts.js";
@@ -37,6 +38,10 @@ export async function monitorDiscordUserProvider(
     fingerprint,
   });
 
+  // Register user REST client with the unified access registry
+  const guildRegistry = getGuildRegistry();
+  guildRegistry.registerClient("user", rest, accountId);
+
   const gateway = new DiscordUserGateway(token, fingerprint);
   let selfUserId = "";
 
@@ -45,6 +50,12 @@ export async function monitorDiscordUserProvider(
     runtime.log(
       `[${accountId}] discord-user gateway connected as ${data.user.username}#${data.user.discriminator} (${data.user.id}), ${data.guilds.length} guild(s)`,
     );
+    // Register guild access for each guild the user account is in
+    for (const guild of data.guilds) {
+      if (!guild.unavailable) {
+        guildRegistry.registerAccess(guild.id, "user", accountId);
+      }
+    }
   });
 
   gateway.on("dispatch", (event: string, data: unknown) => {

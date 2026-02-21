@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getUnifiedDiscordRest } from "../../discord-access/index.js";
 import { createDiscordActionGate } from "../../discord/accounts.js";
 import { readStringParam } from "./common.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
@@ -62,6 +63,16 @@ export async function handleDiscordAction(
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
+
+  // When no explicit accountId is specified, try to use the unified
+  // access router which picks bot vs user account per-request.
+  // Inject the unified REST into params so sub-handlers can use it.
+  if (!accountId) {
+    const unified = getUnifiedDiscordRest();
+    if (unified) {
+      params = { ...params, _rest: unified };
+    }
+  }
 
   if (messagingActions.has(action)) {
     return await handleDiscordMessagingAction(action, params, isActionEnabled);

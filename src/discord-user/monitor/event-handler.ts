@@ -1,3 +1,4 @@
+import { getGuildRegistry } from "../../discord-access/guild-registry.js";
 import { logVerbose } from "../../globals.js";
 import type { DiscordUserRawMessage, DiscordUserMessageHandlerParams } from "./message-handler.js";
 import { handleDiscordUserMessage } from "./message-handler.js";
@@ -6,7 +7,6 @@ export type DiscordUserEventHandlerParams = DiscordUserMessageHandlerParams;
 
 /**
  * Dispatch a gateway event to the appropriate handler.
- * Phase 1: only MESSAGE_CREATE is handled.
  */
 export async function handleDiscordUserEvent(
   event: string,
@@ -29,8 +29,23 @@ export async function handleDiscordUserEvent(
       }
       break;
     }
+    case "GUILD_CREATE": {
+      const guild = data as { id?: string; unavailable?: boolean };
+      if (guild?.id && !guild.unavailable) {
+        getGuildRegistry().registerAccess(guild.id, "user", params.accountId);
+        logVerbose(`discord-user: GUILD_CREATE → registered access for guild ${guild.id}`);
+      }
+      break;
+    }
+    case "GUILD_DELETE": {
+      const guild = data as { id?: string };
+      if (guild?.id) {
+        getGuildRegistry().removeAccess(guild.id, "user");
+        logVerbose(`discord-user: GUILD_DELETE → removed access for guild ${guild.id}`);
+      }
+      break;
+    }
     default:
-      // Future: GUILD_CREATE, MESSAGE_UPDATE, etc.
       break;
   }
 }
