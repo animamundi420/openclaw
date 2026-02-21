@@ -85,9 +85,10 @@ mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
+export OPENCLAW_HOST_BIND_IP="${OPENCLAW_HOST_BIND_IP:-127.0.0.1}"
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
-export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
@@ -235,6 +236,7 @@ upsert_env() {
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \
   OPENCLAW_WORKSPACE_DIR \
+  OPENCLAW_HOST_BIND_IP \
   OPENCLAW_GATEWAY_PORT \
   OPENCLAW_BRIDGE_PORT \
   OPENCLAW_GATEWAY_BIND \
@@ -254,7 +256,7 @@ docker build \
 echo ""
 echo "==> Onboarding (interactive)"
 echo "When prompted:"
-echo "  - Gateway bind: lan"
+echo "  - Gateway bind: loopback"
 echo "  - Gateway auth: token"
 echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"
@@ -278,7 +280,12 @@ docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
 
 echo ""
 echo "Gateway running with host port mapping."
-echo "Access from tailnet devices via the host's tailnet IP."
+echo "Host bind IP: $OPENCLAW_HOST_BIND_IP"
+if [[ "$OPENCLAW_HOST_BIND_IP" == "127.0.0.1" && "$OPENCLAW_GATEWAY_BIND" == "loopback" ]]; then
+  echo "Exposure: loopback-only (not reachable from LAN/tailnet)."
+else
+  echo "Exposure: non-loopback publishing enabled. Ensure firewall/routing policy is intentional."
+fi
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
 echo "Token: $OPENCLAW_GATEWAY_TOKEN"

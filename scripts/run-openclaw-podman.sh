@@ -75,7 +75,8 @@ OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-openclaw:local}"
 PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
-GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+HOST_BIND_IP="${OPENCLAW_PODMAN_HOST_BIND_IP:-${OPENCLAW_HOST_BIND_IP:-127.0.0.1}}"
+GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
 
 # Safe cwd for podman (openclaw is nologin; avoid inherited cwd from sudo)
 cd "$EFFECTIVE_HOME" 2>/dev/null || cd /tmp 2>/dev/null || true
@@ -201,11 +202,11 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   "${ENV_FILE_ARGS[@]}" \
   -v "$CONFIG_DIR:/home/node/.openclaw:rw" \
   -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw" \
-  -p "${HOST_GATEWAY_PORT}:18789" \
-  -p "${HOST_BRIDGE_PORT}:18790" \
+  -p "${HOST_BIND_IP}:${HOST_GATEWAY_PORT}:18789" \
+  -p "${HOST_BIND_IP}:${HOST_BRIDGE_PORT}:18790" \
   "$OPENCLAW_IMAGE" \
   node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789
 
-echo "Container $CONTAINER_NAME started. Dashboard: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
+echo "Container $CONTAINER_NAME started. Dashboard: http://${HOST_BIND_IP}:${HOST_GATEWAY_PORT}/"
 echo "Logs: podman logs -f $CONTAINER_NAME"
 echo "For auto-start/restarts, use: ./setup-podman.sh --quadlet (Quadlet + systemd user service)."
