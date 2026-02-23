@@ -1,0 +1,23 @@
+{
+  "name": "@openclaw/slideshow",
+  "version": "2026.2.19",
+  "private": true,
+  "description": "Remotion-powered slideshow video generator for OpenClaw.",
+  "type": "module",
+  "dependencies": {
+    "@remotion/bundler": "^4.0.0",
+    "@remotion/renderer": "^4.0.0",
+    "@remotion/transitions": "^4.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

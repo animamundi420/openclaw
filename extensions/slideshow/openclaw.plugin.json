@@ -1,0 +1,37 @@
+{
+  "id": "slideshow",
+  "name": "Slideshow",
+  "description": "Create MP4 slideshow videos from structured slide data using Remotion.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "outputDir": { "type": "string", "description": "Rendered video output directory" },
+      "defaultTheme": {
+        "type": "string",
+        "enum": ["dark", "light", "corporate", "neon", "ocean"],
+        "default": "dark"
+      },
+      "defaultTransition": {
+        "type": "string",
+        "enum": ["fade", "slide", "wipe", "flip", "clock-wipe", "none"],
+        "default": "fade"
+      },
+      "defaultFps": { "type": "number", "default": 30 },
+      "defaultDurationPerSlide": { "type": "number", "default": 5 },
+      "maxSlides": { "type": "number", "default": 50 },
+      "defaultNarrationProvider": {
+        "type": "string",
+        "enum": ["piper", "say", "auto"],
+        "default": "auto",
+        "description": "Default TTS provider for voice narration"
+      },
+      "piperModelPath": {
+        "type": "string",
+        "description": "Default path to Piper ONNX voice model"
+      },
+      "piperBinaryPath": { "type": "string", "description": "Path to piper binary if not in PATH" }
+    }
+  }
+}
