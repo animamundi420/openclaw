@@ -379,6 +379,11 @@ export async function installLaunchAgent({
     environment,
   });
   await fs.writeFile(plistPath, plist, "utf8");
+  try {
+    await fs.chmod(plistPath, 0o600);
+  } catch {
+    // Best-effort hardening; continue even if chmod is unavailable.
+  }
 
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);

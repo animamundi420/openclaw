@@ -202,10 +202,9 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
-  token?: string;
   launchdLabel?: string;
 }): Record<string, string | undefined> {
-  const { env, port, token, launchdLabel } = params;
+  const { env, port, launchdLabel } = params;
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel ||
@@ -223,7 +222,6 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_PORT: String(port),
-    OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,

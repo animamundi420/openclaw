@@ -14,7 +14,8 @@
     "roots": [
       ".",
       "../openclaw-mission-control",
-      "../ClawRouter"
+      "../ClawRouter",
+      "../../.openclaw/extensions/zoom-watcher"
     ],
     "includeExtensions": [
       ".ts",
