@@ -64,6 +64,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       state.files.set(key, data);
       state.dirs.add(String(key.split("/").slice(0, -1).join("/")));
     }),
+    chmod: vi.fn(async () => {}),
   };
   return { ...wrapped, default: wrapped };
 });

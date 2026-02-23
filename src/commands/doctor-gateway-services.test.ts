@@ -79,7 +79,7 @@ const gatewayProgramArguments = [
   "18789",
 ];
 
-function setupGatewayTokenRepairScenario(expectedToken: string) {
+function setupGatewayTokenRepairScenario() {
   mocks.readCommand.mockResolvedValue({
     programArguments: gatewayProgramArguments,
     environment: {
@@ -99,9 +99,7 @@ function setupGatewayTokenRepairScenario(expectedToken: string) {
   mocks.buildGatewayInstallPlan.mockResolvedValue({
     programArguments: gatewayProgramArguments,
     workingDirectory: "/tmp",
-    environment: {
-      OPENCLAW_GATEWAY_TOKEN: expectedToken,
-    },
+    environment: {},
   });
   mocks.install.mockResolvedValue(undefined);
 }
@@ -112,7 +110,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
-    setupGatewayTokenRepairScenario("config-token");
+    setupGatewayTokenRepairScenario();
 
     const cfg: OpenClawConfig = {
       gateway: {
@@ -130,11 +128,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         expectedGatewayToken: "config-token",
       }),
     );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "config-token",
-      }),
-    );
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -142,7 +136,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
     try {
-      setupGatewayTokenRepairScenario("env-token");
+      setupGatewayTokenRepairScenario();
 
       const cfg: OpenClawConfig = {
         gateway: {},
@@ -155,11 +149,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           expectedGatewayToken: "env-token",
         }),
       );
-      expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          token: "env-token",
-        }),
-      );
+      expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
       expect(mocks.install).toHaveBeenCalledTimes(1);
     } finally {
       if (previousToken === undefined) {

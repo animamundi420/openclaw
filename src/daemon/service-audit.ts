@@ -212,14 +212,13 @@ function auditGatewayToken(
     return;
   }
   const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (serviceToken === expectedToken) {
+  if (!serviceToken || serviceToken === expectedToken) {
     return;
   }
   issues.push({
     code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
-    message:
-      "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
-    detail: serviceToken ? "service token is stale" : "service token is missing",
+    message: "Gateway service embeds a stale OPENCLAW_GATEWAY_TOKEN",
+    detail: "service token differs from gateway.auth.token in openclaw.json",
     level: "recommended",
   });
 }
@@ -371,13 +370,14 @@ export function checkTokenDrift(params: {
 }): ServiceConfigIssue | null {
   const { serviceToken, configToken } = params;
 
-  // No drift if both are undefined/empty
-  if (!serviceToken && !configToken) {
+  // No drift if either side is empty. Modern daemon installs avoid embedding
+  // OPENCLAW_GATEWAY_TOKEN in service environments and read from config at runtime.
+  if (!serviceToken || !configToken) {
     return null;
   }
 
-  // Drift: config has token, service has different or no token
-  if (configToken && serviceToken !== configToken) {
+  // Drift: both are present but differ.
+  if (serviceToken !== configToken) {
     return {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:

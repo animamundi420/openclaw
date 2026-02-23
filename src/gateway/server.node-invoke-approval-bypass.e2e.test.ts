@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
@@ -53,6 +54,28 @@ async function requestAllowOnceApproval(ws: WebSocket, command: string): Promise
   return approvalId;
 }
 
+function createDeviceIdentity(): {
+  identity: DeviceIdentity;
+  deviceId: string;
+  publicKeyRaw: string;
+  privateKeyPem: string;
+} {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
+  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
+  if (!deviceId) {
+    throw new Error("failed to derive device id");
+  }
+  return {
+    identity: { deviceId, publicKeyPem, privateKeyPem },
+    deviceId,
+    publicKeyRaw,
+    privateKeyPem,
+  };
+}
+
 describe("node.invoke approval bypass", () => {
   let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
   let port: number;
@@ -67,24 +90,13 @@ describe("node.invoke approval bypass", () => {
     await server.close();
   });
 
-  const connectOperator = async (scopes: string[]) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws, { token: "secret", scopes });
-    expect(res.ok).toBe(true);
-    return ws;
-  };
-
-  const connectOperatorWithNewDevice = async (scopes: string[]) => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
-    const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-    const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-    expect(deviceId).toBeTruthy();
+  const connectOperator = async (
+    scopes: string[],
+    device = createDeviceIdentity(),
+  ): Promise<WebSocket> => {
     const signedAtMs = Date.now();
     const payload = buildDeviceAuthPayload({
-      deviceId: deviceId!,
+      deviceId: device.deviceId,
       clientId: GATEWAY_CLIENT_NAMES.TEST,
       clientMode: GATEWAY_CLIENT_MODES.TEST,
       role: "operator",
@@ -98,9 +110,9 @@ describe("node.invoke approval bypass", () => {
       token: "secret",
       scopes,
       device: {
-        id: deviceId!,
-        publicKey: publicKeyRaw,
-        signature: signDevicePayload(privateKeyPem, payload),
+        id: device.deviceId,
+        publicKey: device.publicKeyRaw,
+        signature: signDevicePayload(device.privateKeyPem, payload),
         signedAt: signedAtMs,
       },
     });
@@ -108,7 +120,12 @@ describe("node.invoke approval bypass", () => {
     return ws;
   };
 
+  const connectOperatorWithNewDevice = async (scopes: string[]) => {
+    return await connectOperator(scopes, createDeviceIdentity());
+  };
+
   const connectLinuxNode = async (onInvoke: (payload: unknown) => void) => {
+    const nodeDevice = createDeviceIdentity();
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
       readyResolve = resolve;
@@ -124,6 +141,7 @@ describe("node.invoke approval bypass", () => {
       platform: "linux",
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
+      deviceIdentity: nodeDevice.identity,
       commands: ["system.run"],
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
@@ -248,8 +266,9 @@ describe("node.invoke approval bypass", () => {
       lastInvokeParams = JSON.parse(raw) as Record<string, unknown>;
     });
 
-    const ws = await connectOperator(["operator.write", "operator.approvals"]);
-    const ws2 = await connectOperator(["operator.write"]);
+    const operatorDevice = createDeviceIdentity();
+    const ws = await connectOperator(["operator.write", "operator.approvals"], operatorDevice);
+    const ws2 = await connectOperator(["operator.write"], operatorDevice);
 
     const nodeId = await getConnectedNodeId(ws);
     const approvalId = await requestAllowOnceApproval(ws, "echo hi");
@@ -289,7 +308,8 @@ describe("node.invoke approval bypass", () => {
       sawInvoke = true;
     });
 
-    const ws = await connectOperator(["operator.write", "operator.approvals"]);
+    const operatorDevice = createDeviceIdentity();
+    const ws = await connectOperator(["operator.write", "operator.approvals"], operatorDevice);
     const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
 
     const nodeId = await getConnectedNodeId(ws);
