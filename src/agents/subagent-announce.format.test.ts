@@ -1437,6 +1437,167 @@ describe("subagent announce formatting", () => {
     expect(call?.expectFinal).toBe(true);
   });
 
+  it("keeps completion-mode announce internal for webchat requester origin", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-webchat-main",
+        lastChannel: "telegram",
+        lastTo: "telegram:6040419800",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:webchat-check",
+      childRunId: "run-webchat-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "webchat" },
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
+  });
+
+  it("keeps queued announce internal for webchat requester origin", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-webchat-queued",
+        lastChannel: "telegram",
+        lastTo: "telegram:6040419800",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:webchat-queued",
+      childRunId: "run-webchat-queued",
+      requesterSessionKey: "main",
+      requesterOrigin: { channel: "webchat" },
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    });
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
+  });
+
+  it("mirrors completion to telegram when mirror mode is enabled for webchat requester origin", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      channels: {
+        telegram: {
+          defaultTo: 6040419800,
+        },
+      },
+      plugins: {
+        entries: {
+          "openclaw-run-control": {
+            config: {
+              completionMirrorEnabled: true,
+              completionMirrorChannel: "telegram",
+              completionMirrorTo: "telegram:6040419800",
+            },
+          },
+        },
+      },
+    } as typeof configOverride;
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-webchat-mirror",
+        lastChannel: "telegram",
+        lastTo: "telegram:6040419800",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:webchat-mirror",
+      childRunId: "run-webchat-mirror",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "webchat" },
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const agentCall = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.channel).toBeUndefined();
+    expect(agentCall?.params?.to).toBeUndefined();
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(sendCall?.params?.channel).toBe("telegram");
+    expect(sendCall?.params?.to).toBe("telegram:6040419800");
+    const mirroredMessage =
+      typeof sendCall?.params?.message === "string" ? sendCall.params.message : "";
+    expect(mirroredMessage).toContain("✅ Subagent main finished");
+  });
+
+  it("does not duplicate completion mirror when primary target already matches mirror target", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      plugins: {
+        entries: {
+          "openclaw-run-control": {
+            config: {
+              completionMirrorEnabled: true,
+              completionMirrorChannel: "telegram",
+              completionMirrorTo: "telegram:6040419800",
+            },
+          },
+        },
+      },
+    } as typeof configOverride;
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:telegram-mirror-dedupe",
+      childRunId: "run-telegram-mirror-dedupe",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "telegram", to: "telegram:6040419800" },
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(sendCall?.params?.channel).toBe("telegram");
+    expect(sendCall?.params?.to).toBe("telegram:6040419800");
+  });
+
   it("injects direct announce into requester subagent session instead of chat channel", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);

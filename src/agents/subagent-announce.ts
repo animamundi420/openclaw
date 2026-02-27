@@ -61,12 +61,150 @@ type SubagentAnnounceDeliveryResult = {
   error?: string;
 };
 
+type CompletionMirrorTarget = {
+  channel: string;
+  to: string;
+  accountId?: string;
+};
+
 function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
   const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
     return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
   }
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
+}
+
+function resolveCompletionMirrorTarget(
+  cfg: ReturnType<typeof loadConfig>,
+): CompletionMirrorTarget | undefined {
+  const entries = cfg.plugins?.entries as Record<string, unknown> | undefined;
+  const runControlEntry = entries?.["openclaw-run-control"] as Record<string, unknown> | undefined;
+  const pluginConfig = runControlEntry?.config as Record<string, unknown> | undefined;
+  if (!pluginConfig || pluginConfig.completionMirrorEnabled !== true) {
+    return undefined;
+  }
+
+  const channelRaw =
+    typeof pluginConfig.completionMirrorChannel === "string" &&
+    pluginConfig.completionMirrorChannel.trim()
+      ? pluginConfig.completionMirrorChannel.trim().toLowerCase()
+      : "telegram";
+  if (!isDeliverableMessageChannel(channelRaw)) {
+    return undefined;
+  }
+
+  const toFromPlugin =
+    typeof pluginConfig.completionMirrorTo === "string" && pluginConfig.completionMirrorTo.trim()
+      ? pluginConfig.completionMirrorTo.trim()
+      : undefined;
+  const toFromTelegramDefault = (() => {
+    if (channelRaw !== "telegram") {
+      return undefined;
+    }
+    const telegram = cfg.channels?.telegram as { defaultTo?: unknown } | undefined;
+    const defaultTo = telegram?.defaultTo;
+    if (typeof defaultTo === "number" && Number.isFinite(defaultTo)) {
+      return `telegram:${String(Math.trunc(defaultTo))}`;
+    }
+    if (typeof defaultTo === "string" && defaultTo.trim()) {
+      const value = defaultTo.trim();
+      return value.includes(":") ? value : `telegram:${value}`;
+    }
+    return undefined;
+  })();
+
+  const to = toFromPlugin ?? toFromTelegramDefault;
+  if (!to) {
+    return undefined;
+  }
+
+  const accountId =
+    typeof pluginConfig.completionMirrorAccountId === "string" &&
+    pluginConfig.completionMirrorAccountId.trim()
+      ? pluginConfig.completionMirrorAccountId.trim()
+      : undefined;
+
+  return {
+    channel: channelRaw,
+    to,
+    accountId,
+  };
+}
+
+function isSameDeliveryTarget(
+  left:
+    | {
+        channel?: string;
+        to?: string;
+        accountId?: string;
+      }
+    | undefined,
+  right:
+    | {
+        channel?: string;
+        to?: string;
+        accountId?: string;
+      }
+    | undefined,
+): boolean {
+  const leftChannel = left?.channel?.trim().toLowerCase();
+  const rightChannel = right?.channel?.trim().toLowerCase();
+  const leftTo = left?.to?.trim();
+  const rightTo = right?.to?.trim();
+  const leftAccount = normalizeAccountId(left?.accountId);
+  const rightAccount = normalizeAccountId(right?.accountId);
+  return (
+    Boolean(leftChannel) &&
+    leftChannel === rightChannel &&
+    leftTo === rightTo &&
+    leftAccount === rightAccount
+  );
+}
+
+async function sendCompletionMirror(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  completionMessage?: string;
+  primaryTarget?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
+  requesterIsSubagent: boolean;
+  directIdempotencyKey: string;
+  announceTimeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.requesterIsSubagent || !params.completionMessage?.trim() || params.signal?.aborted) {
+    return;
+  }
+  const target = resolveCompletionMirrorTarget(params.cfg);
+  if (!target) {
+    return;
+  }
+  if (isSameDeliveryTarget(target, params.primaryTarget)) {
+    return;
+  }
+  try {
+    await runAnnounceDeliveryWithRetry({
+      operation: "completion mirror send",
+      signal: params.signal,
+      run: async () =>
+        await callGateway({
+          method: "send",
+          params: {
+            channel: target.channel,
+            to: target.to,
+            accountId: target.accountId,
+            message: params.completionMessage,
+            idempotencyKey: `${params.directIdempotencyKey}:mirror`,
+          },
+          timeoutMs: params.announceTimeoutMs,
+        }),
+    });
+  } catch (err) {
+    defaultRuntime.log(`[warn] completion mirror delivery failed: ${summarizeDeliveryError(err)}`);
+  }
 }
 
 function buildCompletionDeliveryMessage(params: {
@@ -443,23 +581,15 @@ function resolveAnnounceOrigin(
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
-    // Ignore internal channel hints (webchat) so a valid persisted route
-    // can still be used for outbound delivery. Non-standard channels that
-    // are not in the deliverable list should NOT be stripped here — doing
-    // so causes the session entry's stale lastChannel (often WhatsApp) to
-    // override the actual requester origin, leading to delivery failures.
-    return mergeDeliveryContext(
-      {
-        accountId: normalizedRequester.accountId,
-        threadId: normalizedRequester.threadId,
-      },
-      normalizedEntry,
-    );
-  }
   // requesterOrigin (captured at spawn time) reflects the channel the user is
   // actually on and must take priority over the session entry, which may carry
   // stale lastChannel / lastTo values from a previous channel interaction.
+  //
+  // Keep internal channels (webchat) intact here. Stripping them allows stale
+  // external routes (for example Telegram) to hijack completion delivery from
+  // TUI/webchat sessions.
+  // requesterOrigin (captured at spawn time) reflects the channel the user is
+  // actually on and must take priority over the session entry.
   const entryForMerge =
     normalizedRequester?.to &&
     normalizedRequester.threadId == null &&
@@ -484,6 +614,14 @@ async function resolveSubagentCompletionOrigin(params: {
   routeMode: "bound" | "fallback" | "hook";
 }> {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  if (requesterOrigin?.channel && isInternalMessageChannel(requesterOrigin.channel)) {
+    // Internal requesters (webchat/TUI) should remain in-session and must not
+    // be remapped to an external bound destination.
+    return {
+      origin: requesterOrigin,
+      routeMode: "fallback",
+    };
+  }
   const requesterConversation = (() => {
     const channel = requesterOrigin?.channel?.trim().toLowerCase();
     const to = requesterOrigin?.to?.trim();
@@ -578,9 +716,15 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
-  const origin = item.origin;
+  const origin = normalizeDeliveryContext(item.origin);
+  const channelRaw = typeof origin?.channel === "string" ? origin.channel.trim() : "";
+  const channel = channelRaw && isDeliverableMessageChannel(channelRaw) ? channelRaw : "";
+  const to = typeof origin?.to === "string" ? origin.to.trim() : "";
+  const shouldDeliverExternally = !requesterIsSubagent && Boolean(channel) && Boolean(to);
   const threadId =
-    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+    shouldDeliverExternally && origin?.threadId != null && origin.threadId !== ""
+      ? String(origin.threadId)
+      : undefined;
   // Share one announce identity across direct and queued delivery paths so
   // gateway dedupe suppresses true retries without collapsing distinct events.
   const idempotencyKey = buildAnnounceIdempotencyKey(
@@ -595,11 +739,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: shouldDeliverExternally ? channel : undefined,
+      accountId: shouldDeliverExternally ? origin?.accountId : undefined,
+      to: shouldDeliverExternally ? to : undefined,
+      threadId,
+      deliver: shouldDeliverExternally,
       idempotencyKey,
     },
     timeoutMs: announceTimeoutMs,
@@ -824,6 +968,20 @@ async function sendSubagentAnnounceDirectly(params: {
             }),
         });
 
+        await sendCompletionMirror({
+          cfg,
+          completionMessage: params.completionMessage,
+          primaryTarget: {
+            channel: completionChannel,
+            to: completionTo,
+            accountId: completionDirectOrigin?.accountId,
+          },
+          requesterIsSubagent: params.requesterIsSubagent,
+          directIdempotencyKey: params.directIdempotencyKey,
+          announceTimeoutMs,
+          signal: params.signal,
+        });
+
         return {
           delivered: true,
           path: "direct",
@@ -872,6 +1030,22 @@ async function sendSubagentAnnounceDirectly(params: {
           expectFinal: true,
           timeoutMs: announceTimeoutMs,
         }),
+    });
+
+    await sendCompletionMirror({
+      cfg,
+      completionMessage: params.completionMessage,
+      primaryTarget: shouldDeliverExternally
+        ? {
+            channel: directChannel,
+            to: directTo,
+            accountId: directOrigin?.accountId,
+          }
+        : undefined,
+      requesterIsSubagent: params.requesterIsSubagent,
+      directIdempotencyKey: params.directIdempotencyKey,
+      announceTimeoutMs,
+      signal: params.signal,
     });
 
     return {
