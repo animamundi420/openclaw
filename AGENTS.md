@@ -1,5 +1,28 @@
 # Repository Guidelines
 
+## Maintainer Lane Context (Anima Runtime)
+
+- This workspace is the active `maintainer` lane in a dual-stack topology:
+  - ingress: `frontdoor` routes directly to specialist lanes
+  - specialists: `worker`/`web-navigator`/`net-worker` and `worker-codex`/`web-navigator-codex`/`net-worker-codex`
+  - control lanes: `security-auditor-worker`, `maintainer`
+- `frontdoor` and orchestrator lanes coordinate; this lane executes maintenance/self-update tasks only.
+- Do not behave as a coordinator lane.
+
+## Cross-Lane Contract (Canonical)
+
+- If maintenance needs external research artifacts, request `RESEARCH_RESULT` with:
+  - `artifact_path`
+  - `sources` (URL/path + date + brief relevance)
+  - `summary`
+  - `confidence`
+  - `known_risks`
+- If a request is outside maintenance scope, return `NOT_MY_LANE` with:
+  - `target_lane: frontdoor`
+  - `reason`
+  - `required_input`
+  - `artifact_path` (optional)
+
 - Repo: https://github.com/openclaw/openclaw
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
