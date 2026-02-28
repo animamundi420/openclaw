@@ -182,4 +182,95 @@ describe("telegramPlugin duplicate token guard", () => {
     );
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-1" });
   });
+
+  it("sendPayload forwards Telegram inline buttons for text sends", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-inline-1" }));
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          sendMessageTelegram,
+        },
+      },
+      text: {
+        chunkMarkdownText: (text: string) => [text],
+      },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "ignored",
+      payload: {
+        text: "approval message",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Allow", callback_data: "/approve x allow-once" }]],
+            quoteText: "quoted",
+          },
+        },
+      },
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      "approval message",
+      expect.objectContaining({
+        buttons: [[{ text: "Allow", callback_data: "/approve x allow-once" }]],
+        quoteText: "quoted",
+      }),
+    );
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-inline-1" });
+  });
+
+  it("sendPayload applies buttons only to the first media send", async () => {
+    const sendMessageTelegram = vi
+      .fn(async () => ({ messageId: "tg-inline-media", chatId: "12345" }))
+      .mockResolvedValueOnce({ messageId: "tg-inline-media-1", chatId: "12345" })
+      .mockResolvedValueOnce({ messageId: "tg-inline-media-2", chatId: "12345" });
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          sendMessageTelegram,
+        },
+      },
+      text: {
+        chunkMarkdownText: (text: string) => [text],
+      },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "ignored",
+      payload: {
+        text: "with media",
+        mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Allow", callback_data: "/approve x allow-once" }]],
+          },
+        },
+      },
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      "12345",
+      "with media",
+      expect.objectContaining({
+        mediaUrl: "/tmp/a.png",
+        buttons: [[{ text: "Allow", callback_data: "/approve x allow-once" }]],
+      }),
+    );
+    expect(sendMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      "12345",
+      "",
+      expect.not.objectContaining({ buttons: expect.anything() }),
+    );
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-inline-media-2" });
+  });
 });

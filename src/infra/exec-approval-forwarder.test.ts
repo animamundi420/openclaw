@@ -129,7 +129,7 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.runAllTimersAsync();
-    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("formats single-line commands as inline code", async () => {
@@ -277,7 +277,7 @@ describe("exec approval forwarder", () => {
         exec: {
           enabled: true,
           mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
+          targets: [{ channel: "slack", to: "U1" }],
         },
       },
     } as OpenClawConfig;
@@ -286,7 +286,7 @@ describe("exec approval forwarder", () => {
     await forwarder.handleResolved({
       id: "req-missing",
       decision: "allow-once",
-      resolvedBy: "telegram:123",
+      resolvedBy: "slack:U1",
       ts: 2000,
       request: {
         command: "echo ok",
@@ -296,6 +296,47 @@ describe("exec approval forwarder", () => {
     });
 
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses resolved and expired notices for telegram targets", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "telegram:123",
+      ts: 2000,
+    });
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    await vi.runAllTimersAsync();
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches inline approval buttons for telegram request forwards", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        payloads: [
+          expect.objectContaining({
+            channelData: {
+              telegram: {
+                buttons: expect.any(Array),
+              },
+            },
+          }),
+        ],
+      }),
+    );
   });
 
   it("uses a longer fence when command already contains triple backticks", async () => {

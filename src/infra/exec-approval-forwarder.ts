@@ -26,6 +26,7 @@ const log = createSubsystemLogger("gateway/exec-approvals");
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
+type ForwardNoticeKind = "request" | "resolved" | "expired";
 
 type PendingApproval = {
   request: ExecApprovalRequest;
@@ -196,6 +197,67 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   return lines.join("\n");
 }
 
+const TELEGRAM_CALLBACK_MAX_BYTES = 64;
+
+function buildTelegramApprovalButtons(requestId: string) {
+  const rows = [
+    [
+      {
+        text: "Allow Once",
+        callback_data: `/approve ${requestId} allow-once`,
+        style: "success",
+      },
+      {
+        text: "Allow Always",
+        callback_data: `/approve ${requestId} allow-always`,
+        style: "primary",
+      },
+    ],
+    [{ text: "Deny", callback_data: `/approve ${requestId} deny`, style: "danger" }],
+  ] as const;
+
+  const exceedsLimit = rows
+    .flat()
+    .some(
+      (button) => Buffer.byteLength(button.callback_data, "utf8") > TELEGRAM_CALLBACK_MAX_BYTES,
+    );
+  if (exceedsLimit) {
+    return undefined;
+  }
+  return rows;
+}
+
+function buildApprovalRequestPayload(params: {
+  text: string;
+  channel: string;
+  requestId?: string;
+}) {
+  if (params.channel !== "telegram" || !params.requestId) {
+    return { text: params.text };
+  }
+  const buttons = buildTelegramApprovalButtons(params.requestId);
+  if (!buttons) {
+    return { text: params.text };
+  }
+  return {
+    text: params.text,
+    channelData: {
+      telegram: {
+        buttons,
+      },
+    },
+  };
+}
+
+function shouldSuppressForwardNotice(params: {
+  channel: string;
+  kind: ForwardNoticeKind;
+}): boolean {
+  // Telegram already gives immediate command ack on /approve; sending extra
+  // resolved/expired lifecycle notices creates noisy double notifications.
+  return params.channel === "telegram" && params.kind !== "request";
+}
+
 function decisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -264,6 +326,8 @@ async function deliverToTargets(params: {
   targets: ForwardTarget[];
   text: string;
   deliver: typeof deliverOutboundPayloads;
+  kind: ForwardNoticeKind;
+  requestId?: string;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -274,6 +338,9 @@ async function deliverToTargets(params: {
     if (!isDeliverableMessageChannel(channel)) {
       return;
     }
+    if (shouldSuppressForwardNotice({ channel, kind: params.kind })) {
+      return;
+    }
     try {
       await params.deliver({
         cfg: params.cfg,
@@ -281,7 +348,13 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [
+          buildApprovalRequestPayload({
+            text: params.text,
+            channel,
+            requestId: params.requestId,
+          }),
+        ],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -367,7 +440,13 @@ export function createExecApprovalForwarder(
         }
         pending.delete(request.id);
         const expiredText = buildExpiredMessage(request);
-        await deliverToTargets({ cfg, targets: entry.targets, text: expiredText, deliver });
+        await deliverToTargets({
+          cfg,
+          targets: entry.targets,
+          text: expiredText,
+          deliver,
+          kind: "expired",
+        });
       })();
     }, expiresInMs);
     timeoutId.unref?.();
@@ -385,6 +464,8 @@ export function createExecApprovalForwarder(
       targets: filteredTargets,
       text,
       deliver,
+      kind: "request",
+      requestId: request.id,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     }).catch((err) => {
       log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
@@ -424,7 +505,7 @@ export function createExecApprovalForwarder(
       return;
     }
     const text = buildResolvedMessage(resolved);
-    await deliverToTargets({ cfg, targets, text, deliver });
+    await deliverToTargets({ cfg, targets, text, deliver, kind: "resolved" });
   };
 
   const stop = () => {

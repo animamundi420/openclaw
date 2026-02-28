@@ -76,20 +76,27 @@ function buildCompletionDeliveryMessage(params: {
     return "";
   }
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
-  const header = (() => {
-    if (params.outcome?.status === "error") {
-      return params.spawnMode === "session"
-        ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
-        : `❌ Subagent ${params.subagentName} failed`;
-    }
-    if (params.outcome?.status === "timeout") {
-      return params.spawnMode === "session"
-        ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
-        : `⏱️ Subagent ${params.subagentName} timed out`;
+  const status = params.outcome?.status ?? "ok";
+  if (status === "ok") {
+    if (hasFindings) {
+      return findingsText;
     }
     return params.spawnMode === "session"
       ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
       : `✅ Subagent ${params.subagentName} finished`;
+  }
+  const header = (() => {
+    if (status === "error") {
+      return params.spawnMode === "session"
+        ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
+        : `❌ Subagent ${params.subagentName} failed`;
+    }
+    if (status === "timeout") {
+      return params.spawnMode === "session"
+        ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
+        : `⏱️ Subagent ${params.subagentName} timed out`;
+    }
+    return `ℹ️ Subagent ${params.subagentName} finished with status: ${status}`;
   })();
   if (!hasFindings) {
     return header;

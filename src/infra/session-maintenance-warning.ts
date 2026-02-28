@@ -13,8 +13,11 @@ type WarningParams = {
   warning: SessionMaintenanceWarning;
 };
 
-const warnedContexts = new Map<string, string>();
+type WarningState = { context: string; sentAtMs: number };
+
+const warnedContexts = new Map<string, WarningState>();
 const log = createSubsystemLogger("session-maintenance-warning");
+const DEFAULT_WARNING_COOLDOWN_MS = 60 * 60 * 1000;
 
 function shouldSendWarning(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
@@ -23,7 +26,6 @@ function shouldSendWarning(): boolean {
 function buildWarningContext(params: WarningParams): string {
   const { warning } = params;
   return [
-    warning.activeSessionKey,
     warning.pruneAfterMs,
     warning.maxEntries,
     warning.wouldPrune ? "prune" : "",
@@ -31,6 +33,68 @@ function buildWarningContext(params: WarningParams): string {
   ]
     .filter(Boolean)
     .join("|");
+}
+
+function resolveWarningCooldownMs(): number {
+  const raw = process.env.OPENCLAW_SESSION_MAINTENANCE_WARNING_COOLDOWN_MS;
+  if (!raw) {
+    return DEFAULT_WARNING_COOLDOWN_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_WARNING_COOLDOWN_MS;
+  }
+  return Math.floor(parsed);
+}
+
+function buildWarningScopeKey(params: {
+  sessionKey: string;
+  target: { channel?: string; to?: string; accountId?: string; threadId?: string | number };
+}): string {
+  if (params.target.channel && params.target.to) {
+    const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
+    return [
+      channel,
+      params.target.to,
+      params.target.accountId ?? "",
+      params.target.threadId ?? "",
+    ].join(":");
+  }
+  return `system:${params.sessionKey}`;
+}
+
+function shouldSuppressWarning(params: {
+  scopeKey: string;
+  context: string;
+  nowMs: number;
+  cooldownMs: number;
+}): boolean {
+  const current = warnedContexts.get(params.scopeKey);
+  if (!current) {
+    return false;
+  }
+  if (current.context !== params.context) {
+    return false;
+  }
+  return params.nowMs - current.sentAtMs < params.cooldownMs;
+}
+
+function markWarningSent(params: {
+  scopeKey: string;
+  context: string;
+  nowMs: number;
+  cooldownMs: number;
+}) {
+  warnedContexts.set(params.scopeKey, { context: params.context, sentAtMs: params.nowMs });
+
+  if (warnedContexts.size < 512) {
+    return;
+  }
+  for (const [key, state] of warnedContexts) {
+    if (params.nowMs - state.sentAtMs >= params.cooldownMs) {
+      warnedContexts.delete(key);
+    }
+  }
 }
 
 function formatDuration(ms: number): string {
@@ -71,17 +135,35 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     return;
   }
 
-  const contextKey = buildWarningContext(params);
-  if (warnedContexts.get(params.sessionKey) === contextKey) {
-    return;
-  }
-  warnedContexts.set(params.sessionKey, contextKey);
-
-  const text = buildWarningText(params.warning);
   const target = resolveSessionDeliveryTarget({
     entry: params.entry,
     requestedChannel: "last",
   });
+  const scopeKey = buildWarningScopeKey({
+    sessionKey: params.sessionKey,
+    target,
+  });
+  const contextKey = buildWarningContext(params);
+  const nowMs = Date.now();
+  const cooldownMs = resolveWarningCooldownMs();
+  if (
+    shouldSuppressWarning({
+      scopeKey,
+      context: contextKey,
+      nowMs,
+      cooldownMs,
+    })
+  ) {
+    return;
+  }
+  markWarningSent({
+    scopeKey,
+    context: contextKey,
+    nowMs,
+    cooldownMs,
+  });
+
+  const text = buildWarningText(params.warning);
 
   if (!target.channel || !target.to) {
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });

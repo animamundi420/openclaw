@@ -70,6 +70,56 @@ function formatDuplicateTelegramTokenReason(params: {
   );
 }
 
+type TelegramOutboundButton = {
+  text: string;
+  callback_data: string;
+  style?: string;
+};
+
+function readTelegramButtons(raw: unknown): TelegramOutboundButton[][] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const rows = raw
+    .map((row) => {
+      if (!Array.isArray(row)) {
+        return [];
+      }
+      return row
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+          const button = entry as {
+            text?: unknown;
+            callback_data?: unknown;
+            style?: unknown;
+          };
+          const text = typeof button.text === "string" ? button.text.trim() : "";
+          const callbackData =
+            typeof button.callback_data === "string" ? button.callback_data.trim() : "";
+          if (!text || !callbackData) {
+            return null;
+          }
+          const style = typeof button.style === "string" ? button.style.trim() : "";
+          return style
+            ? { text, callback_data: callbackData, style }
+            : { text, callback_data: callbackData };
+        })
+        .filter((entry): entry is TelegramOutboundButton => Boolean(entry));
+    })
+    .filter((row) => row.length > 0);
+  return rows.length > 0 ? rows : undefined;
+}
+
+function readTelegramQuoteText(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
@@ -320,6 +370,61 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
+    sendPayload: async ({
+      to,
+      payload,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
+      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+      const messageThreadId = parseTelegramThreadId(threadId);
+      const telegramData =
+        payload.channelData && typeof payload.channelData === "object"
+          ? (payload.channelData as { telegram?: { buttons?: unknown; quoteText?: unknown } })
+              .telegram
+          : undefined;
+      const buttons = readTelegramButtons(telegramData?.buttons);
+      const quoteText = readTelegramQuoteText(telegramData?.quoteText);
+      const text = payload.text ?? "";
+      const mediaUrls = payload.mediaUrls?.length
+        ? payload.mediaUrls
+        : payload.mediaUrl
+          ? [payload.mediaUrl]
+          : [];
+      if (mediaUrls.length === 0) {
+        const result = await send(to, text, {
+          verbose: false,
+          mediaLocalRoots,
+          messageThreadId,
+          replyToMessageId,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+          buttons,
+          quoteText,
+        });
+        return { channel: "telegram", ...result };
+      }
+      let finalResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let index = 0; index < mediaUrls.length; index += 1) {
+        const isFirst = index === 0;
+        finalResult = await send(to, isFirst ? text : "", {
+          verbose: false,
+          mediaUrl: mediaUrls[index],
+          mediaLocalRoots,
+          messageThreadId,
+          replyToMessageId,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+          ...(isFirst ? { buttons, quoteText } : {}),
+        });
+      }
+      return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
+    },
     sendText: async ({ to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
