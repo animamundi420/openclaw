@@ -1,6 +1,6 @@
 ---
 name: gh-issues
-description: "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]"
+description: "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model openai-codex/gpt-5.3-codex] [--notify-channel -1002381931352]"
 user-invocable: true
 metadata:
   { "openclaw": { "requires": { "bins": ["curl", "git", "gh"] }, "primaryEnv": "GH_TOKEN" } }
@@ -46,7 +46,7 @@ Flags (all optional):
 | --yes | false | Skip confirmation and auto-process all filtered issues |
 | --reviews-only | false | Skip issue processing (Phases 2-5). Only run Phase 6 — check open PRs for review comments and address them. |
 | --cron | false | Cron-safe mode: fetch issues and spawn sub-agents, exit without waiting for results. |
-| --model | _(none)_ | Model to use for sub-agents (e.g. `glm-5`, `zai/glm-5`). If not specified, uses the agent's default model. |
+| --model | _(none)_ | Model to use for sub-agents (e.g. `openai-codex/gpt-5.3-codex`). If not specified, uses the agent's default model. |
 | --notify-channel | _(none)_ | Telegram channel ID to send final PR summary to (e.g. -1002381931352). Only the final result with PR links is sent, not status updates. |
 
 Store parsed values for use in subsequent phases.
