@@ -47,6 +47,12 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
+  buildExecApprovalCommandFromCallback,
+  EXEC_APPROVAL_CALLBACK_PREFIX,
+  parseTelegramExecApprovalCallbackData,
+  resolveTelegramExecApprovalCallback,
+} from "./exec-approval-buttons.js";
+import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
@@ -914,6 +920,47 @@ export const registerTelegramHandlers = ({
             return;
           }
         }
+      }
+
+      const approvalCallbackPrefix = `${EXEC_APPROVAL_CALLBACK_PREFIX}:`;
+      if (data.startsWith(approvalCallbackPrefix)) {
+        const parsedApproval = parseTelegramExecApprovalCallbackData(data);
+        if (!parsedApproval) {
+          await replyToCallbackChat("❌ Invalid approval button payload.");
+          return;
+        }
+
+        const resolvedApproval = resolveTelegramExecApprovalCallback({
+          callback: parsedApproval,
+          chatId: String(chatId),
+          accountId: accountId ?? undefined,
+          threadId: resolvedThreadId,
+          userId: senderId,
+        });
+
+        if (!resolvedApproval.ok) {
+          const reasonText =
+            resolvedApproval.reason === "expired"
+              ? "⏱️ This approval request has expired."
+              : resolvedApproval.reason === "user-mismatch"
+                ? "❌ This approval button is bound to a different user."
+                : resolvedApproval.reason === "thread-mismatch"
+                  ? "❌ This approval button is bound to a different topic."
+                  : "❌ This approval button is invalid for this chat/account.";
+          await replyToCallbackChat(reasonText);
+          return;
+        }
+
+        const syntheticMessage = buildSyntheticTextMessage({
+          base: callbackMessage,
+          from: callback.from,
+          text: buildExecApprovalCommandFromCallback(parsedApproval),
+        });
+        await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+          forceWasMentioned: true,
+          messageIdOverride: callback.id,
+        });
+        return;
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);

@@ -8,6 +8,13 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import {
+  buildTelegramExecApprovalButtons,
+  clearTelegramExecApprovalBindings,
+  registerTelegramExecApprovalBinding,
+  resolveTelegramExpectedApproverId,
+} from "../telegram/exec-approval-buttons.js";
+import { parseTelegramTarget } from "../telegram/targets.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
   ExecApprovalDecision,
@@ -21,7 +28,10 @@ const log = createSubsystemLogger("gateway/exec-approvals");
 
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
-type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
+type ForwardTarget = ExecApprovalForwardTarget & {
+  source: "session" | "target";
+  expectedUserId?: string;
+};
 
 type PendingApproval = {
   request: ExecApprovalRequest;
@@ -144,6 +154,29 @@ function shouldSkipDiscordForwarding(
   return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
 }
 
+function normalizeNumericIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return /^\d+$/.test(trimmed) ? trimmed : undefined;
+}
+
+function resolveTargetExpectedUserId(target: ForwardTarget): string | undefined {
+  const explicit = normalizeNumericIdentifier(target.expectedUserId);
+  if (explicit) {
+    return explicit;
+  }
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  if (channel !== "telegram") {
+    return undefined;
+  }
+  return resolveTelegramExpectedApproverId({ to: target.to });
+}
+
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   if (!command.includes("\n") && !command.includes("`")) {
     return { inline: true, text: `\`${command}\`` };
@@ -237,14 +270,21 @@ function defaultResolveSessionTarget(params: {
     to: target.to,
     accountId: target.accountId,
     threadId: target.threadId,
+    expectedUserId: normalizeNumericIdentifier(entry.origin?.from),
   };
 }
+
+type ForwardPayload = {
+  text: string;
+  channelData?: Record<string, unknown>;
+};
 
 async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   text: string;
   deliver: typeof deliverOutboundPayloads;
+  resolvePayload?: (target: ForwardTarget) => ForwardPayload;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -255,6 +295,7 @@ async function deliverToTargets(params: {
     if (!isDeliverableMessageChannel(channel)) {
       return;
     }
+    const payload = params.resolvePayload?.(target) ?? { text: params.text };
     try {
       await params.deliver({
         cfg: params.cfg,
@@ -262,7 +303,7 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [payload],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -293,7 +334,14 @@ function resolveForwardTargets(params: {
       const key = buildTargetKey(sessionTarget);
       if (!seen.has(key)) {
         seen.add(key);
-        targets.push({ ...sessionTarget, source: "session" });
+        const sessionExpectedUserId = normalizeNumericIdentifier(
+          (sessionTarget as { expectedUserId?: string | undefined }).expectedUserId,
+        );
+        targets.push({
+          ...sessionTarget,
+          source: "session",
+          ...(sessionExpectedUserId ? { expectedUserId: sessionExpectedUserId } : {}),
+        });
       }
     }
   }
@@ -306,7 +354,14 @@ function resolveForwardTargets(params: {
         continue;
       }
       seen.add(key);
-      targets.push({ ...target, source: "target" });
+      const explicitExpectedUserId = normalizeNumericIdentifier(
+        (target as { expectedUserId?: string | undefined }).expectedUserId,
+      );
+      targets.push({
+        ...target,
+        source: "target",
+        ...(explicitExpectedUserId ? { expectedUserId: explicitExpectedUserId } : {}),
+      });
     }
   }
 
@@ -339,6 +394,44 @@ export function createExecApprovalForwarder(
       return false;
     }
 
+    clearTelegramExecApprovalBindings(request.id);
+
+    const text = buildRequestMessage(request, nowMs());
+    const payloadByTargetKey = new Map<string, ForwardPayload>();
+    for (const target of filteredTargets) {
+      const key = buildTargetKey(target);
+      const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+      if (channel !== "telegram") {
+        payloadByTargetKey.set(key, { text });
+        continue;
+      }
+
+      const buttons = buildTelegramExecApprovalButtons({ approvalId: request.id });
+      if (!buttons) {
+        payloadByTargetKey.set(key, { text });
+        continue;
+      }
+
+      const parsedTarget = parseTelegramTarget(target.to);
+      registerTelegramExecApprovalBinding({
+        approvalId: request.id,
+        chatId: parsedTarget.chatId,
+        accountId: normalizeAccountId(target.accountId ?? "") || undefined,
+        threadId: target.threadId ?? parsedTarget.messageThreadId,
+        expectedUserId: resolveTargetExpectedUserId(target),
+        expiresAtMs: request.expiresAtMs,
+      });
+
+      payloadByTargetKey.set(key, {
+        text,
+        channelData: {
+          telegram: {
+            buttons,
+          },
+        },
+      });
+    }
+
     const expiresInMs = Math.max(0, request.expiresAtMs - nowMs());
     const timeoutId = setTimeout(() => {
       void (async () => {
@@ -347,6 +440,7 @@ export function createExecApprovalForwarder(
           return;
         }
         pending.delete(request.id);
+        clearTelegramExecApprovalBindings(request.id);
         const expiredText = buildExpiredMessage(request);
         await deliverToTargets({ cfg, targets: entry.targets, text: expiredText, deliver });
       })();
@@ -360,12 +454,12 @@ export function createExecApprovalForwarder(
       return false;
     }
 
-    const text = buildRequestMessage(request, nowMs());
     void deliverToTargets({
       cfg,
       targets: filteredTargets,
       text,
       deliver,
+      resolvePayload: (target) => payloadByTargetKey.get(buildTargetKey(target)) ?? { text },
       shouldSend: () => pending.get(request.id) === pendingEntry,
     }).catch((err) => {
       log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
@@ -381,6 +475,7 @@ export function createExecApprovalForwarder(
       }
       pending.delete(resolved.id);
     }
+    clearTelegramExecApprovalBindings(resolved.id);
     const cfg = getConfig();
     let targets = entry?.targets;
 
@@ -413,6 +508,7 @@ export function createExecApprovalForwarder(
       if (entry.timeoutId) {
         clearTimeout(entry.timeoutId);
       }
+      clearTelegramExecApprovalBindings(entry.request.id);
     }
     pending.clear();
   };

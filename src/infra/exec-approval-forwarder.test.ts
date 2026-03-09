@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetTelegramExecApprovalBindingsForTests } from "../telegram/exec-approval-buttons.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -15,6 +16,7 @@ const baseRequest = {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetTelegramExecApprovalBindingsForTests();
 });
 
 function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
@@ -22,6 +24,16 @@ function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
     | { payloads?: Array<{ text?: string }> }
     | undefined;
   return firstCall?.payloads?.[0]?.text ?? "";
+}
+
+function getFirstDeliveryPayload(deliver: ReturnType<typeof vi.fn>): {
+  text?: string;
+  channelData?: Record<string, unknown>;
+} {
+  const firstCall = deliver.mock.calls[0]?.[0] as
+    | { payloads?: Array<{ text?: string; channelData?: Record<string, unknown> }> }
+    | undefined;
+  return firstCall?.payloads?.[0] ?? {};
 }
 
 const TARGETS_CFG = {
@@ -124,6 +136,43 @@ describe("exec approval forwarder", () => {
 
     await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("attaches telegram approval buttons with text fallback", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    const payload = getFirstDeliveryPayload(deliver);
+    expect(payload.text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(payload.channelData).toEqual({
+      telegram: {
+        buttons: [
+          [
+            { text: "Approve once", callback_data: "eap:o:req-1", style: "success" },
+            { text: "Approve always", callback_data: "eap:a:req-1", style: "primary" },
+            { text: "Deny", callback_data: "eap:d:req-1", style: "danger" },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("falls back to text-only when telegram callback payload would be unsafe", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        id: `bad id ${"x".repeat(80)}`,
+      }),
+    ).resolves.toBe(true);
+
+    const payload = getFirstDeliveryPayload(deliver);
+    expect(payload.text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(payload.channelData).toBeUndefined();
   });
 
   it("formats single-line commands as inline code", async () => {
