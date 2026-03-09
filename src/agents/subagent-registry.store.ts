@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { loadJsonFile } from "../infra/json-file.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -117,6 +119,30 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   return out;
 }
 
+function persistStore(pathname: string, data: PersistedSubagentRegistry) {
+  const dir = path.dirname(pathname);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+
+  const tmpPath = `${pathname}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    fs.renameSync(tmpPath, pathname);
+    fs.chmodSync(pathname, 0o600);
+  } catch (error) {
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // ignore cleanup failures
+    }
+    throw error;
+  }
+}
+
 export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
@@ -127,5 +153,5 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
     version: REGISTRY_VERSION,
     runs: serialized,
   };
-  saveJsonFile(pathname, out);
+  persistStore(pathname, out);
 }
