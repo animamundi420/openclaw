@@ -6,11 +6,31 @@ import { resolveRunWorkspaceDir } from "./workspace-run.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 describe("resolveRunWorkspaceDir", () => {
-  it("resolves explicit workspace values without fallback", () => {
+  it("forces subagent session keys to use the agent workspace fallback", () => {
     const explicit = path.join(process.cwd(), "tmp", "workspace-run-explicit");
+    const fallbackWorkspace = path.join(process.cwd(), "tmp", "workspace-default-main");
+    const cfg = {
+      agents: {
+        defaults: { workspace: fallbackWorkspace },
+      },
+    } satisfies OpenClawConfig;
     const result = resolveRunWorkspaceDir({
       workspaceDir: explicit,
       sessionKey: "agent:main:subagent:test",
+      config: cfg,
+    });
+
+    expect(result.usedFallback).toBe(true);
+    expect(result.fallbackReason).toBe("subagent_forced_agent_workspace");
+    expect(result.agentId).toBe("main");
+    expect(result.workspaceDir).toBe(path.resolve(fallbackWorkspace));
+  });
+
+  it("resolves explicit workspace values without fallback for non-subagent sessions", () => {
+    const explicit = path.join(process.cwd(), "tmp", "workspace-run-explicit");
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: explicit,
+      sessionKey: "agent:main:main",
     });
 
     expect(result.usedFallback).toBe(false);
@@ -30,7 +50,7 @@ describe("resolveRunWorkspaceDir", () => {
 
     const result = resolveRunWorkspaceDir({
       workspaceDir: undefined,
-      sessionKey: "agent:research:subagent:test",
+      sessionKey: "agent:research:main",
       config: cfg,
     });
 
@@ -50,7 +70,7 @@ describe("resolveRunWorkspaceDir", () => {
 
     const result = resolveRunWorkspaceDir({
       workspaceDir: "   ",
-      sessionKey: "agent:main:subagent:test",
+      sessionKey: "agent:main:main",
       config: cfg,
     });
 
@@ -63,7 +83,7 @@ describe("resolveRunWorkspaceDir", () => {
   it("falls back to built-in main workspace when config is unavailable", () => {
     const result = resolveRunWorkspaceDir({
       workspaceDir: null,
-      sessionKey: "agent:main:subagent:test",
+      sessionKey: "agent:main:main",
       config: undefined,
     });
 

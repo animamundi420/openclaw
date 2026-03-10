@@ -4,6 +4,7 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   classifySessionKeyShape,
   DEFAULT_AGENT_ID,
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -11,7 +12,11 @@ import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
-export type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
+export type WorkspaceFallbackReason =
+  | "missing"
+  | "blank"
+  | "invalid_type"
+  | "subagent_forced_agent_workspace";
 type AgentIdSource = "explicit" | "session_key" | "default";
 
 export type ResolveRunWorkspaceResult = {
@@ -78,12 +83,13 @@ export function resolveRunWorkspaceDir(params: {
   config?: OpenClawConfig;
 }): ResolveRunWorkspaceResult {
   const requested = params.workspaceDir;
+  const forceAgentWorkspace = isSubagentSessionKey(params.sessionKey);
   const { agentId, agentIdSource } = resolveRunAgentId({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     config: params.config,
   });
-  if (typeof requested === "string") {
+  if (!forceAgentWorkspace && typeof requested === "string") {
     const trimmed = requested.trim();
     if (trimmed) {
       const sanitized = sanitizeForPromptLiteral(trimmed);
@@ -99,8 +105,13 @@ export function resolveRunWorkspaceDir(params: {
     }
   }
 
-  const fallbackReason: WorkspaceFallbackReason =
-    requested == null ? "missing" : typeof requested === "string" ? "blank" : "invalid_type";
+  const fallbackReason: WorkspaceFallbackReason = forceAgentWorkspace
+    ? "subagent_forced_agent_workspace"
+    : requested == null
+      ? "missing"
+      : typeof requested === "string"
+        ? "blank"
+        : "invalid_type";
   const fallbackWorkspace = resolveAgentWorkspaceDir(params.config ?? {}, agentId);
   const sanitizedFallback = sanitizeForPromptLiteral(fallbackWorkspace);
   if (sanitizedFallback !== fallbackWorkspace) {

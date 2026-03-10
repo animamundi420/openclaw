@@ -19,7 +19,6 @@ import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
-  resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import {
@@ -541,16 +540,10 @@ export async function spawnSubagentDirect(
     agentGroupId: ctx.agentGroupId,
     agentGroupChannel: ctx.agentGroupChannel,
     agentGroupSpace: ctx.agentGroupSpace,
-    workspaceDir: ctx.workspaceDir,
   });
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
-    workspaceDir: resolveSpawnedWorkspaceInheritance({
-      config: cfg,
-      requesterSessionKey: requesterInternalKey,
-      explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
-    }),
   });
 
   const childIdem = crypto.randomUUID();
