@@ -82,6 +82,7 @@ apps/ios/*.mobileprovision
 docs/.local/
 IDENTITY.md
 USER.md
+.openclaw/workspace-state.json
 .tgz
 .idea
 
